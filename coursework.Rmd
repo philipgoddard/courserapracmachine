@@ -1,0 +1,154 @@
+---
+title: "Machine Learning"
+output: html_document
+---
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+library(dplyr)
+library(caret)
+library(devtools)
+library(ggbiplot)
+setwd('~/R-stuff/courses/08_PracticalMachineLearning/')
+data <- read.csv('training.csv', header=TRUE, na.string=c('','NA'))
+load("~/R-stuff/courses/08_PracticalMachineLearning/fittedRF.RData")
+```
+
+##Introduction, Data Splitting and Data Cleansing
+
+This assignment is concerned with applying machine learning techniques to classify the manner in which excercise was performed. The raw data set has 160 columns, and the goal is to be able to predict the manner in which the excercise was performed. The variable 'classe' categorizes the manner into A,B,C,D and E.
+
+A training and test set are provided, however the test set is to be used to validate our model, so the training set should be split into a training and test set. A 75:25 training:test split is used after setting the seed to ensure the method is reproducable. The splitting will allow cross validation of the final model.
+
+```{r}
+set.seed(1234)
+inTrain = createDataPartition(data$classe, p = 3/4)[[1]]
+training = data[ inTrain,]
+testing = data[-inTrain,]
+```
+
+Many columns contain predominantly NA's. I chose to remove these, as imputing this many missing values will not provide good results. Further, the first seven columns contain labels, not predictors, so they should be removed. Additionally, I want to ensure that there are no colinear predictors or near zero variance predictors. This can be tested with nearZeroVar() and findCorrelation(), and it turns out that there are no predictors that should be removed for this reason.
+
+```{r}
+table(sapply(as.list(training), function(x){ sum(is.na(x)) }))
+training <- training[ , colSums(is.na(training)) == 0 ]
+#can also remove columns 1:7 as they are labels
+training <- select(training, -c(1:7))
+```
+
+So overall, we are left with 52 predictors to determine the outcome 'classe'.
+
+##Exploratory Data Analysis
+
+The aim of the exploratory data analysis is to determine what type of model might be suitable.
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+multiplotList <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <-  c(..., plotlist)
+  
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+colNames <- names(training)[1:52]
+
+j <-1
+plotList <- list()
+for(i in colNames){
+  plt <- ggplot(training, aes_string(x=i)) +geom_density(aes(colour=classe)) 
+  assign(paste("plot", j, sep = ""), plt)   
+  j <- j+1
+  plotList[[i]] <- plt
+}
+```
+
+```{r, echo=FALSE}
+multiplotList(plotList[8:11],cols=2)
+
+```
+
+The sample plots demonstrate that many of the variables do not look normally distributed, so linear models might struggle without preprocessing. A PCA decomposition is shown below
+
+```{r }
+training.pca <- prcomp(training[,-53], center = TRUE, scale. = TRUE)
+g <- ggbiplot(training.pca, obs.scale = 1, var.scale = 1, 
+              groups = training$classe, ellipse = TRUE, 
+              circle = TRUE)
+g <- g + scale_color_discrete(name = '')
+g <- g + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g)
+```
+
+This shows us that after the PCA, which we do to create a new set of variables that explains the most variance of the data set, when using all the variable, unique clusters do not form for each classe. This suggests that linear models may struggle without considerable effort preprocessing or carefully selecting and testing which features produce clear well seperated clusters. Therefore, a non-linear model will be applied.
+
+##Modelling Strategy
+
+A random forest will be fitted to the training data. The model is well known for accuracy, but is prone to overfitting and can take a long time to fit. (In fact, the model took over an hour to fit to the training data set)
+
+```{r,eval=FALSE}
+fitRF <- train(classe~., data=training, model='rf')
+```
+
+The caret defaults were used; it would only make sense to start adjusting them upon cross validation of the model if it did not perform well. For a random forest, the default resampling is 25 bootstrap resamples.
+
+##Results
+
+From the fit, we can see the 20 most important predictors below (see ?randomForest for definition of importance).
+
+```{r, echo=FALSE,message=FALSE}
+plot(varImp(fitRF),top=20)
+```
+
+Time to cross validate on our testing set. Select the same columns in testing as we did for training, and then predict using our random forest fit. We can look at the confusion matrix to pull out some useful statistics about the result.
+
+```{r}
+keep <- names(training)
+testing <- testing[, c(unlist(keep))]
+predRF <- predict(fitRF, newdata=testing)
+testing$RFpred <- predRF
+confusionMatrix(table(predRF,testing$classe))
+```
+
+The model is over 99% accurate on the test set, so I will stop here. In other words, I expect the out of sample error to be less than 1% on the validation set (so I should score 20/20!)
+
+##Conclusion
+
+A predictive model has been built to determine the manner in which an excercise is performed using 52 predictors, which are measurements from sensors attached to subjects. A random forest was chosen to build the model. The out of sample error is less than 1%. The model will now be applied to the validation set and submitted for grading.
+
+```{r}
+keep <- names(training)
+keep[53] <- 'problem_id'
+validation <- validation[,c(unlist(keep))]
+predRFV <- predict(fitRF, newdata=validation)
+predRFV
+```
